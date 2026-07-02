@@ -5,7 +5,7 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
-use crate::messages::{Certificate, Header, Vote};
+use crate::messages::{Certificate, Header, Transaction, Vote};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -53,6 +53,13 @@ pub enum WorkerPrimaryMessage {
     OurBatch(Digest, WorkerId),
     /// The worker indicates it received a batch's digest from another authority.
     OthersBatch(Digest, WorkerId),
+    /// The worker forwards a client transaction directly to the primary.
+    Transaction(Transaction),
+}
+
+pub(crate) enum ProposerMessage {
+    Batch(Digest, WorkerId),
+    Transaction(Transaction),
 }
 
 pub struct Primary;
@@ -67,7 +74,7 @@ impl Primary {
         rx_consensus: Receiver<Certificate>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
-        let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
+        let (tx_our_payload, rx_our_payload) = channel(CHANNEL_CAPACITY);
         let (tx_parents, rx_parents) = channel(CHANNEL_CAPACITY);
         let (tx_headers, rx_headers) = channel(CHANNEL_CAPACITY);
         let (tx_sync_headers, rx_sync_headers) = channel(CHANNEL_CAPACITY);
@@ -117,7 +124,7 @@ impl Primary {
             address,
             /* handler */
             WorkerReceiverHandler {
-                tx_our_digests,
+                tx_our_payload,
                 tx_others_digests,
             },
         );
@@ -156,7 +163,13 @@ impl Primary {
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
-        GarbageCollector::spawn(&name, &committee, consensus_round.clone(), rx_consensus);
+        GarbageCollector::spawn(
+            &name,
+            &committee,
+            parameters.use_narwhal,
+            consensus_round.clone(),
+            rx_consensus,
+        );
 
         // Receives batch digests from other workers. They are only used to validate headers.
         PayloadReceiver::spawn(store.clone(), /* rx_workers */ rx_others_digests);
@@ -190,10 +203,11 @@ impl Primary {
             name,
             &committee,
             signature_service,
+            parameters.use_narwhal,
             parameters.header_size,
             parameters.max_header_delay,
             /* rx_core */ rx_parents,
-            /* rx_workers */ rx_our_digests,
+            /* rx_workers */ rx_our_payload,
             /* tx_core */ tx_headers,
         );
 
@@ -246,7 +260,7 @@ impl MessageHandler for PrimaryReceiverHandler {
 /// Defines how the network receiver handles incoming workers messages.
 #[derive(Clone)]
 struct WorkerReceiverHandler {
-    tx_our_digests: Sender<(Digest, WorkerId)>,
+    tx_our_payload: Sender<ProposerMessage>,
     tx_others_digests: Sender<(Digest, WorkerId)>,
 }
 
@@ -260,8 +274,8 @@ impl MessageHandler for WorkerReceiverHandler {
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized).map_err(DagError::SerializationError)? {
             WorkerPrimaryMessage::OurBatch(digest, worker_id) => self
-                .tx_our_digests
-                .send((digest, worker_id))
+                .tx_our_payload
+                .send(ProposerMessage::Batch(digest, worker_id))
                 .await
                 .expect("Failed to send workers' digests"),
             WorkerPrimaryMessage::OthersBatch(digest, worker_id) => self
@@ -269,6 +283,11 @@ impl MessageHandler for WorkerReceiverHandler {
                 .send((digest, worker_id))
                 .await
                 .expect("Failed to send workers' digests"),
+            WorkerPrimaryMessage::Transaction(transaction) => self
+                .tx_our_payload
+                .send(ProposerMessage::Transaction(transaction))
+                .await
+                .expect("Failed to send workers' transactions"),
         }
         Ok(())
     }

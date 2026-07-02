@@ -17,5 +17,7 @@ mod synchronizer;
 #[path = "tests/common.rs"]
 mod common;
 
-pub use crate::messages::{Certificate, Header};
+pub use crate::messages::{
+    transaction_digest, transaction_sent_at_micros, Certificate, Header, Payload, Transaction,
+};
 pub use crate::primary::{Primary, PrimaryWorkerMessage, Round, WorkerPrimaryMessage};

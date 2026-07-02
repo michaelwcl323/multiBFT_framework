@@ -17,7 +17,14 @@ import subprocess
 import re
 import shlex
 
-from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
+from benchmark.config import (
+    Committee,
+    Key,
+    NodeParameters,
+    BenchParameters,
+    ConfigError,
+    apply_protocol_parameters,
+)
 from benchmark.utils import BenchError, Print, PathMaker, load_private_key
 from benchmark.commands import CommandMaker
 from benchmark.logs import LogParser, ParseError
@@ -1506,14 +1513,18 @@ SCRIPTEOF'''
             if output.stderr:
                 raise ExecutionError(output.stderr)
     
-    def run(self, bench_parameters_dict, node_parameters_dict, debug=False):
+    def run(self, bench_parameters_dict, node_parameters_dict, protocol_parameters_dict=None, debug=False):
         """Run benchmarks on CloudLab nodes
         
         Args:
             bench_parameters_dict: Benchmark parameters (may include 'trigger_attack' as bool or list)
             node_parameters_dict: Node parameters
+            protocol_parameters_dict: Protocol selection parameters
             debug: Enable debug mode
         """
+        if isinstance(protocol_parameters_dict, bool):
+            debug = protocol_parameters_dict
+            protocol_parameters_dict = None
         assert isinstance(debug, bool)
         Print.heading('Starting CloudLab benchmark')
         
@@ -1532,6 +1543,10 @@ SCRIPTEOF'''
         # Remove trigger_attack from dict before creating BenchParameters
         # (since it's not a standard parameter)
         bench_params_for_parsing = {k: v for k, v in bench_parameters_dict.items() if k != 'trigger_attack'}
+        node_parameters_dict = apply_protocol_parameters(
+            node_parameters_dict,
+            protocol_parameters_dict,
+        )
         
         try:
             bench_parameters = BenchParameters(bench_params_for_parsing)
@@ -1601,4 +1616,3 @@ SCRIPTEOF'''
                             continue
         
         Print.heading('All benchmarks completed')
-

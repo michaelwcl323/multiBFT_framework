@@ -4,6 +4,8 @@ use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use log::{debug, info, log_enabled, warn};
 use primary::{Certificate, Round};
+#[cfg(feature = "benchmark")]
+use primary::{transaction_digest, Payload};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -181,9 +183,20 @@ impl Consensus {
                 info!("Committed {}", certificate.header);
 
                 #[cfg(feature = "benchmark")]
-                for digest in certificate.header.payload.keys() {
-                    // NOTE: This log entry is used to compute performance.
-                    info!("Committed {} -> {:?}", certificate.header, digest);
+                match &certificate.header.payload {
+                    Payload::Narwhal(payload) => {
+                        for digest in payload.keys() {
+                            // NOTE: This log entry is used to compute performance.
+                            info!("Committed {} -> {:?}", certificate.header, digest);
+                        }
+                    }
+                    Payload::Direct(payload) => {
+                        for transaction in payload {
+                            let digest = transaction_digest(transaction);
+                            // NOTE: This log entry is used to compute performance.
+                            info!("Committed {} -> {:?}", certificate.header, digest);
+                        }
+                    }
                 }
 
                 self.tx_primary

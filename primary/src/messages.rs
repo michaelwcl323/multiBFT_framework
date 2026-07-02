@@ -10,11 +10,95 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 
+pub type Transaction = Vec<u8>;
+
+pub fn transaction_digest(transaction: &Transaction) -> Digest {
+    Digest(
+        Sha512::digest(transaction).as_slice()[..32]
+            .try_into()
+            .unwrap(),
+    )
+}
+
+pub fn transaction_sent_at_micros(transaction: &Transaction) -> Option<u64> {
+    if transaction.len() <= 16 {
+        return None;
+    }
+    let sent_at = u64::from_be_bytes(transaction[9..17].try_into().ok()?);
+    (sent_at != 0).then_some(sent_at)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum Payload {
+    Narwhal(BTreeMap<Digest, WorkerId>),
+    Direct(Vec<Transaction>),
+}
+
+impl Payload {
+    pub fn new(use_narwhal: bool) -> Self {
+        if use_narwhal {
+            Self::Narwhal(BTreeMap::new())
+        } else {
+            Self::Direct(Vec::new())
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Narwhal(payload) => payload.is_empty(),
+            Self::Direct(payload) => payload.is_empty(),
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Narwhal(payload) => payload.keys().map(|x| x.size()).sum(),
+            Self::Direct(payload) => payload.iter().map(|x| x.len()).sum(),
+        }
+    }
+
+    pub fn push_narwhal(&mut self, digest: Digest, worker_id: WorkerId) {
+        match self {
+            Self::Narwhal(payload) => {
+                payload.insert(digest, worker_id);
+            }
+            Self::Direct(_) => panic!("cannot add Narwhal digest to direct payload"),
+        }
+    }
+
+    pub fn push_transaction(&mut self, transaction: Transaction) {
+        match self {
+            Self::Narwhal(_) => panic!("cannot add transaction to Narwhal payload"),
+            Self::Direct(payload) => payload.push(transaction),
+        }
+    }
+
+    pub fn narwhal(&self) -> Option<&BTreeMap<Digest, WorkerId>> {
+        match self {
+            Self::Narwhal(payload) => Some(payload),
+            Self::Direct(_) => None,
+        }
+    }
+
+    pub fn transactions(&self) -> Option<&[Transaction]> {
+        match self {
+            Self::Narwhal(_) => None,
+            Self::Direct(payload) => Some(payload),
+        }
+    }
+}
+
+impl Default for Payload {
+    fn default() -> Self {
+        Self::Narwhal(BTreeMap::new())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
     pub author: PublicKey,
     pub round: Round,
-    pub payload: BTreeMap<Digest, WorkerId>,
+    pub payload: Payload,
     pub parents: BTreeSet<Digest>,
     pub id: Digest,
     pub signature: Signature,
@@ -24,7 +108,7 @@ impl Header {
     pub async fn new(
         author: PublicKey,
         round: Round,
-        payload: BTreeMap<Digest, WorkerId>,
+        payload: Payload,
         parents: BTreeSet<Digest>,
         signature_service: &mut SignatureService,
     ) -> Self {
@@ -53,11 +137,13 @@ impl Header {
         let voting_rights = committee.stake(&self.author);
         ensure!(voting_rights > 0, DagError::UnknownAuthority(self.author));
 
-        // Ensure all worker ids are correct.
-        for worker_id in self.payload.values() {
-            committee
-                .worker(&self.author, &worker_id)
-                .map_err(|_| DagError::MalformedHeader(self.id.clone()))?;
+        // Ensure all worker ids are correct when the header carries Narwhal batch references.
+        if let Payload::Narwhal(payload) = &self.payload {
+            for worker_id in payload.values() {
+                committee
+                    .worker(&self.author, &worker_id)
+                    .map_err(|_| DagError::MalformedHeader(self.id.clone()))?;
+            }
         }
 
         // Check the signature.
@@ -72,9 +158,21 @@ impl Hash for Header {
         let mut hasher = Sha512::new();
         hasher.update(&self.author);
         hasher.update(self.round.to_le_bytes());
-        for (x, y) in &self.payload {
-            hasher.update(x);
-            hasher.update(y.to_le_bytes());
+        match &self.payload {
+            Payload::Narwhal(payload) => {
+                hasher.update(b"narwhal");
+                for (x, y) in payload {
+                    hasher.update(x);
+                    hasher.update(y.to_le_bytes());
+                }
+            }
+            Payload::Direct(payload) => {
+                hasher.update(b"direct");
+                for transaction in payload {
+                    hasher.update((transaction.len() as u64).to_le_bytes());
+                    hasher.update(transaction);
+                }
+            }
         }
         for x in &self.parents {
             hasher.update(x);
@@ -91,7 +189,7 @@ impl fmt::Debug for Header {
             self.id,
             self.round,
             self.author,
-            self.payload.keys().map(|x| x.size()).sum::<usize>(),
+            self.payload.size(),
         )
     }
 }

@@ -60,6 +60,9 @@ pub type WorkerId = u32;
 
 #[derive(Deserialize, Clone)]
 pub struct Parameters {
+    /// Whether workers use Narwhal's batch dissemination path. When false, workers forward
+    /// transactions directly to their primary and headers carry transactions as payload.
+    pub use_narwhal: bool,
     /// The preferred header size. The primary creates a new header when it has enough parents and
     /// enough batches' digests to reach `header_size`. Denominated in bytes.
     pub header_size: usize,
@@ -84,6 +87,7 @@ pub struct Parameters {
 impl Default for Parameters {
     fn default() -> Self {
         Self {
+            use_narwhal: true,
             header_size: 1_000,
             max_header_delay: 100,
             gc_depth: 50,
@@ -99,6 +103,7 @@ impl Import for Parameters {}
 
 impl Parameters {
     pub fn log(&self) {
+        info!("Use Narwhal set to {}", self.use_narwhal);
         info!("Header size set to {} B", self.header_size);
         info!("Max header delay set to {} ms", self.max_header_delay);
         info!("Garbage collection depth set to {} rounds", self.gc_depth);

@@ -9,7 +9,14 @@ from math import ceil
 from copy import deepcopy
 import subprocess
 
-from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
+from benchmark.config import (
+    Committee,
+    Key,
+    NodeParameters,
+    BenchParameters,
+    ConfigError,
+    apply_protocol_parameters,
+)
 from benchmark.utils import BenchError, Print, PathMaker, load_private_key, progress_bar
 from benchmark.commands import CommandMaker
 from benchmark.logs import LogParser, ParseError
@@ -305,11 +312,18 @@ class Bench:
         Print.info('Parsing logs and computing performance...')
         return LogParser.process(PathMaker.logs_path(), faults=faults)
 
-    def run(self, bench_parameters_dict, node_parameters_dict, debug=False):
+    def run(self, bench_parameters_dict, node_parameters_dict, protocol_parameters_dict=None, debug=False):
+        if isinstance(protocol_parameters_dict, bool):
+            debug = protocol_parameters_dict
+            protocol_parameters_dict = None
         assert isinstance(debug, bool)
         Print.heading('Starting remote benchmark')
         try:
             bench_parameters = BenchParameters(bench_parameters_dict)
+            node_parameters_dict = apply_protocol_parameters(
+                node_parameters_dict,
+                protocol_parameters_dict,
+            )
             node_parameters = NodeParameters(node_parameters_dict)
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)

@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::Header;
+use crate::messages::{Header, Payload};
 use crate::primary::{PrimaryMessage, PrimaryWorkerMessage, Round};
 use bytes::Bytes;
 use config::{Committee, WorkerId};
@@ -226,8 +226,10 @@ impl HeaderWaiter {
                 Some(result) = waiting.next() => match result {
                     Ok(Some(header)) => {
                         let _ = self.pending.remove(&header.id);
-                        for x in header.payload.keys() {
-                            let _ = self.batch_requests.remove(x);
+                        if let Payload::Narwhal(payload) = &header.payload {
+                            for x in payload.keys() {
+                                let _ = self.batch_requests.remove(x);
+                            }
                         }
                         for x in &header.parents {
                             let _ = self.parent_requests.remove(x);

@@ -47,6 +47,21 @@ class LogParser:
         proposals, commits, self.configs, primary_ips = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
+        direct_sizes = {
+            d: int(s)
+            for log in primaries
+            for d, s in findall(r'Transaction ([^ ]+) contains (\d+) B', log)
+        }
+        self.direct_sent = {
+            d: int(t) / 1_000_000
+            for log in primaries
+            for d, t in findall(r'Transaction ([^ ]+) contains \d+ B sent at (\d+) us', log)
+        }
+        direct_samples = {
+            int(s): d
+            for log in primaries
+            for d, s in findall(r'Transaction ([^ ]+) contains sample tx (\d+)', log)
+        }
 
         # Parse the workers logs.
         try:
@@ -58,6 +73,9 @@ class LogParser:
         self.sizes = {
             k: v for x in sizes for k, v in x.items() if k in self.commits
         }
+        if not self.sizes and direct_sizes:
+            self.sizes = {k: v for k, v in direct_sizes.items() if k in self.commits}
+            self.received_samples = tuple(direct_samples for _ in self.sent_samples)
 
         # Determine whether the primary and the workers are collocated.
         self.collocate = set(primary_ips) == set(workers_ips)
@@ -100,10 +118,18 @@ class LogParser:
 
         tmp = findall(r'\[(.*Z) .* Created B\d+\([^ ]+\) -> ([^ ]+=)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        tmp += [
+            (f'tx:{d}', self._to_posix(t))
+            for t, d in findall(r'\[(.*Z) .* Created B\d+\([^ ]+\) -> tx (\d+)', log)
+        ]
         proposals = self._merge_results([tmp])
 
         tmp = findall(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        tmp += [
+            (f'tx:{d}', self._to_posix(t))
+            for t, d in findall(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> tx (\d+)', log)
+        ]
         commits = self._merge_results([tmp])
 
         configs = {
@@ -128,6 +154,7 @@ class LogParser:
             'max_batch_delay': int(
                 search(r'Max batch delay .* (\d+)', log).group(1)
             ),
+            'use_narwhal': search(r'Use Narwhal .* (true|false)', log).group(1) == 'true',
         }
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
@@ -177,6 +204,14 @@ class LogParser:
         return tps, bps, duration
 
     def _end_to_end_latency(self):
+        if getattr(self, 'direct_sent', None):
+            latency = [
+                c - self.direct_sent[d]
+                for d, c in self.commits.items()
+                if d in self.direct_sent
+            ]
+            return mean(latency) if latency else 0
+
         latency = []
         for sent, received in zip(self.sent_samples, self.received_samples):
             for tx_id, batch_id in received.items():
@@ -195,6 +230,7 @@ class LogParser:
         sync_retry_nodes = self.configs[0]['sync_retry_nodes']
         batch_size = self.configs[0]['batch_size']
         max_batch_delay = self.configs[0]['max_batch_delay']
+        use_narwhal = self.configs[0]['use_narwhal']
 
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
@@ -220,6 +256,7 @@ class LogParser:
             f' GC depth: {gc_depth:,} round(s)\n'
             f' Sync retry delay: {sync_retry_delay:,} ms\n'
             f' Sync retry nodes: {sync_retry_nodes:,} node(s)\n'
+            f' Use Narwhal: {use_narwhal}\n'
             f' batch size: {batch_size:,} B\n'
             f' Max batch delay: {max_batch_delay:,} ms\n'
             '\n'

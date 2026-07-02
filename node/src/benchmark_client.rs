@@ -9,6 +9,7 @@ use futures::sink::SinkExt as _;
 use log::{info, warn};
 use rand::Rng;
 use std::net::SocketAddr;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -86,10 +87,11 @@ impl Client {
         const PRECISION: u64 = 20; // Sample precision.
         const BURST_DURATION: u64 = 1000 / PRECISION;
 
-        // The transaction size must be at least 16 bytes to ensure all txs are different.
-        if self.size < 9 {
+        // The transaction size must be at least 17 bytes: 1 byte tx type,
+        // 8 bytes id, and 8 bytes client send timestamp.
+        if self.size < 17 {
             return Err(anyhow::Error::msg(
-                "Transaction size must be at least 9 bytes",
+                "Transaction size must be at least 17 bytes",
             ));
         }
 
@@ -126,6 +128,11 @@ impl Client {
                     tx.put_u8(1u8); // Standard txs start with 1.
                     tx.put_u64(r); // Ensures all clients send different txs.
                 };
+                let sent_at = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Failed to measure time")
+                    .as_micros() as u64;
+                tx.put_u64(sent_at);
 
                 tx.resize(self.size, 0u8);
                 let bytes = tx.split().freeze();

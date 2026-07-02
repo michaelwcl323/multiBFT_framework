@@ -1,6 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
 use crate::common::{committee, keys};
+use crate::primary::ProposerMessage;
 use tokio::sync::mpsc::channel;
 
 #[tokio::test]
@@ -17,6 +18,7 @@ async fn propose_empty() {
         name,
         &committee(),
         signature_service,
+        /* use_narwhal */ true,
         /* header_size */ 1_000,
         /* max_header_delay */ 20,
         /* rx_core */ rx_parents,
@@ -45,6 +47,7 @@ async fn propose_payload() {
         name,
         &committee(),
         signature_service,
+        /* use_narwhal */ true,
         /* header_size */ 32,
         /* max_header_delay */ 1_000_000, // Ensure it is not triggered.
         /* rx_core */ rx_parents,
@@ -56,13 +59,13 @@ async fn propose_payload() {
     let digest = Digest(name.0);
     let worker_id = 0;
     tx_our_digests
-        .send((digest.clone(), worker_id))
+        .send(ProposerMessage::Batch(digest.clone(), worker_id))
         .await
         .unwrap();
 
     // Ensure the proposer makes a correct header from the provided payload.
     let header = rx_headers.recv().await.unwrap();
     assert_eq!(header.round, 1);
-    assert_eq!(header.payload.get(&digest), Some(&worker_id));
+    assert_eq!(header.payload.narwhal().unwrap().get(&digest), Some(&worker_id));
     assert!(header.verify(&committee()).is_ok());
 }

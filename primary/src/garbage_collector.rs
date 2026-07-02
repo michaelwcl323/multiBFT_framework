@@ -26,15 +26,20 @@ impl GarbageCollector {
     pub fn spawn(
         name: &PublicKey,
         committee: &Committee,
+        use_narwhal: bool,
         consensus_round: Arc<AtomicU64>,
         rx_consensus: Receiver<Certificate>,
     ) {
-        let addresses = committee
-            .our_workers(name)
-            .expect("Our public key or worker id is not in the committee")
-            .iter()
-            .map(|x| x.primary_to_worker)
-            .collect();
+        let addresses = if use_narwhal {
+            committee
+                .our_workers(name)
+                .expect("Our public key or worker id is not in the committee")
+                .iter()
+                .map(|x| x.primary_to_worker)
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         tokio::spawn(async move {
             Self {
@@ -61,11 +66,13 @@ impl GarbageCollector {
                 self.consensus_round.store(round, Ordering::Relaxed);
 
                 // Trigger cleanup on the workers..
-                let bytes = bincode::serialize(&PrimaryWorkerMessage::Cleanup(round))
-                    .expect("Failed to serialize our own message");
-                self.network
-                    .broadcast(self.addresses.clone(), Bytes::from(bytes))
-                    .await;
+                if !self.addresses.is_empty() {
+                    let bytes = bincode::serialize(&PrimaryWorkerMessage::Cleanup(round))
+                        .expect("Failed to serialize our own message");
+                    self.network
+                        .broadcast(self.addresses.clone(), Bytes::from(bytes))
+                        .await;
+                }
             }
         }
     }

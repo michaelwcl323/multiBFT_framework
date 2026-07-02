@@ -12,7 +12,7 @@ use crypto::{Digest, PublicKey};
 use futures::sink::SinkExt as _;
 use log::{error, info, warn};
 use network::{MessageHandler, Receiver, Writer};
-use primary::PrimaryWorkerMessage;
+use primary::{PrimaryWorkerMessage, WorkerPrimaryMessage};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use store::Store;
@@ -71,9 +71,13 @@ impl Worker {
 
         // Spawn all worker tasks.
         let (tx_primary, rx_primary) = channel(CHANNEL_CAPACITY);
-        worker.handle_primary_messages();
-        worker.handle_clients_transactions(tx_primary.clone());
-        worker.handle_workers_messages(tx_primary);
+        if worker.parameters.use_narwhal {
+            worker.handle_primary_messages();
+            worker.handle_clients_transactions(tx_primary.clone());
+            worker.handle_workers_messages(tx_primary);
+        } else {
+            worker.handle_clients_transactions_direct(tx_primary.clone());
+        }
 
         // The `PrimaryConnector` allows the worker to send messages to its primary.
         PrimaryConnector::spawn(
@@ -193,6 +197,26 @@ impl Worker {
         );
     }
 
+    /// Spawn the client transaction receiver for the direct-payload mode.
+    fn handle_clients_transactions_direct(&self, tx_primary: Sender<SerializedBatchDigestMessage>) {
+        let mut address = self
+            .committee
+            .worker(&self.name, &self.id)
+            .expect("Our public key or worker id is not in the committee")
+            .transactions;
+        address.set_ip("0.0.0.0".parse().unwrap());
+        Receiver::spawn(
+            address,
+            /* handler */
+            DirectTxReceiverHandler { tx_primary },
+        );
+
+        info!(
+            "Worker {} listening to client transactions on {} (direct payload mode)",
+            self.id, address
+        );
+    }
+
     /// Spawn all tasks responsible to handle messages from other workers.
     fn handle_workers_messages(&self, tx_primary: Sender<SerializedBatchDigestMessage>) {
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
@@ -253,6 +277,29 @@ impl MessageHandler for TxReceiverHandler {
             .send(message.to_vec())
             .await
             .expect("Failed to send transaction");
+
+        // Give the change to schedule other tasks.
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+}
+
+/// Defines how the network receiver handles incoming transactions in direct-payload mode.
+#[derive(Clone)]
+struct DirectTxReceiverHandler {
+    tx_primary: Sender<SerializedBatchDigestMessage>,
+}
+
+#[async_trait]
+impl MessageHandler for DirectTxReceiverHandler {
+    async fn dispatch(&self, _writer: &mut Writer, message: Bytes) -> Result<(), Box<dyn Error>> {
+        let message = WorkerPrimaryMessage::Transaction(message.to_vec());
+        let serialized = bincode::serialize(&message)
+            .expect("Failed to serialize transaction for the primary");
+        self.tx_primary
+            .send(serialized)
+            .await
+            .expect("Failed to send transaction to primary");
 
         // Give the change to schedule other tasks.
         tokio::task::yield_now().await;

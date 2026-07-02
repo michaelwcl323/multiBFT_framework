@@ -1,7 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::DagResult;
 use crate::header_waiter::WaiterMessage;
-use crate::messages::{Certificate, Header};
+use crate::messages::{Certificate, Header, Payload};
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
@@ -48,13 +48,20 @@ impl Synchronizer {
     /// synchronize with other nodes (through our workers), and re-schedule processing of the
     /// header for when we will have its complete payload.
     pub async fn missing_payload(&mut self, header: &Header) -> DagResult<bool> {
+        // Direct payloads are carried by the header itself. Narwhal payloads still require
+        // local batch availability checks.
+        let payload = match &header.payload {
+            Payload::Narwhal(payload) => payload,
+            Payload::Direct(_) => return Ok(false),
+        };
+
         // We don't store the payload of our own workers.
         if header.author == self.name {
             return Ok(false);
         }
 
         let mut missing = HashMap::new();
-        for (digest, worker_id) in header.payload.iter() {
+        for (digest, worker_id) in payload.iter() {
             // Check whether we have the batch. If one of our worker has the batch, the primary stores the pair
             // (digest, worker_id) in its own storage. It is important to verify that we received the batch
             // from the correct worker id to prevent the following attack:

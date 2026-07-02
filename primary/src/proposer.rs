@@ -1,12 +1,16 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header};
-use crate::primary::Round;
-use config::{Committee, WorkerId};
+use crate::messages::{Certificate, Header, Payload};
+#[cfg(feature = "benchmark")]
+use crate::messages::{transaction_digest, transaction_sent_at_micros};
+use crate::primary::{ProposerMessage, Round};
+use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
+#[cfg(feature = "benchmark")]
+use std::convert::TryInto as _;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
@@ -20,6 +24,8 @@ pub struct Proposer {
     name: PublicKey,
     /// Service to sign headers.
     signature_service: SignatureService,
+    /// Whether headers carry Narwhal batch digests or transactions directly.
+    use_narwhal: bool,
     /// The size of the headers' payload.
     header_size: usize,
     /// The maximum delay to wait for batches' digests.
@@ -27,8 +33,8 @@ pub struct Proposer {
 
     /// Receives the parents to include in the next header (along with their round number).
     rx_core: Receiver<(Vec<Digest>, Round)>,
-    /// Receives the batches' digests from our workers.
-    rx_workers: Receiver<(Digest, WorkerId)>,
+    /// Receives payload items from our workers.
+    rx_workers: Receiver<ProposerMessage>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
 
@@ -36,9 +42,9 @@ pub struct Proposer {
     round: Round,
     /// Holds the certificates' ids waiting to be included in the next header.
     last_parents: Vec<Digest>,
-    /// Holds the batches' digests waiting to be included in the next header.
-    digests: Vec<(Digest, WorkerId)>,
-    /// Keeps track of the size (in bytes) of batches' digests that we received so far.
+    /// Holds the payload waiting to be included in the next header.
+    payload: Payload,
+    /// Keeps track of the size (in bytes) of payload that we received so far.
     payload_size: usize,
 }
 
@@ -48,10 +54,11 @@ impl Proposer {
         name: PublicKey,
         committee: &Committee,
         signature_service: SignatureService,
+        use_narwhal: bool,
         header_size: usize,
         max_header_delay: u64,
         rx_core: Receiver<(Vec<Digest>, Round)>,
-        rx_workers: Receiver<(Digest, WorkerId)>,
+        rx_workers: Receiver<ProposerMessage>,
         tx_core: Sender<Header>,
     ) {
         let genesis = Certificate::genesis(committee)
@@ -63,6 +70,7 @@ impl Proposer {
             Self {
                 name,
                 signature_service,
+                use_narwhal,
                 header_size,
                 max_header_delay,
                 rx_core,
@@ -70,7 +78,7 @@ impl Proposer {
                 tx_core,
                 round: 1,
                 last_parents: genesis,
-                digests: Vec::with_capacity(2 * header_size),
+                payload: Payload::new(use_narwhal),
                 payload_size: 0,
             }
             .run()
@@ -83,7 +91,7 @@ impl Proposer {
         let header = Header::new(
             self.name,
             self.round,
-            self.digests.drain(..).collect(),
+            std::mem::replace(&mut self.payload, Payload::new(self.use_narwhal)),
             self.last_parents.drain(..).collect(),
             &mut self.signature_service,
         )
@@ -91,9 +99,36 @@ impl Proposer {
         debug!("Created {:?}", header);
 
         #[cfg(feature = "benchmark")]
-        for digest in header.payload.keys() {
-            // NOTE: This log entry is used to compute performance.
-            info!("Created {} -> {:?}", header, digest);
+        match &header.payload {
+            Payload::Narwhal(payload) => {
+                for digest in payload.keys() {
+                    // NOTE: This log entry is used to compute performance.
+                    info!("Created {} -> {:?}", header, digest);
+                }
+            }
+            Payload::Direct(payload) => {
+                for transaction in payload {
+                    let digest = transaction_digest(transaction);
+                    // NOTE: This log entry is used to compute performance.
+                    info!("Created {} -> {:?}", header, digest);
+                    // NOTE: This log entry is used to compute performance.
+                    match transaction_sent_at_micros(transaction) {
+                        Some(sent_at) => info!(
+                            "Transaction {:?} contains {} B sent at {} us",
+                            digest,
+                            transaction.len(),
+                            sent_at
+                        ),
+                        None => info!("Transaction {:?} contains {} B", digest, transaction.len()),
+                    }
+                    if transaction.first() == Some(&0u8) && transaction.len() > 8 {
+                        if let Ok(id) = transaction[1..9].try_into() {
+                            // NOTE: This log entry is used to compute performance.
+                            info!("Transaction {:?} contains sample tx {}", digest, u64::from_be_bytes(id));
+                        }
+                    }
+                }
+            }
         }
 
         // Send the new header to the `Core` that will broadcast and process it.
@@ -142,9 +177,21 @@ impl Proposer {
                     // Signal that we have enough parent certificates to propose a new header.
                     self.last_parents = parents;
                 }
-                Some((digest, worker_id)) = self.rx_workers.recv() => {
-                    self.payload_size += digest.size();
-                    self.digests.push((digest, worker_id));
+                Some(message) = self.rx_workers.recv() => {
+                    match message {
+                        ProposerMessage::Batch(digest, worker_id) => {
+                            if self.use_narwhal {
+                                self.payload_size += digest.size();
+                                self.payload.push_narwhal(digest, worker_id);
+                            }
+                        }
+                        ProposerMessage::Transaction(transaction) => {
+                            if !self.use_narwhal {
+                                self.payload_size += transaction.len();
+                                self.payload.push_transaction(transaction);
+                            }
+                        }
+                    }
                 }
                 () = &mut timer => {
                     // Nothing to do.

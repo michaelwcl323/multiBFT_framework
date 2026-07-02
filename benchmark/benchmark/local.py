@@ -5,7 +5,14 @@ from os.path import basename, splitext
 from time import sleep
 
 from benchmark.commands import CommandMaker
-from benchmark.config import Key, LocalCommittee, NodeParameters, BenchParameters, ConfigError
+from benchmark.config import (
+    Key,
+    LocalCommittee,
+    NodeParameters,
+    BenchParameters,
+    ConfigError,
+    apply_protocol_parameters,
+)
 from benchmark.logs import LogParser, ParseError
 from benchmark.utils import Print, BenchError, PathMaker
 
@@ -13,9 +20,13 @@ from benchmark.utils import Print, BenchError, PathMaker
 class LocalBench:
     BASE_PORT = 3000
 
-    def __init__(self, bench_parameters_dict, node_parameters_dict):
+    def __init__(self, bench_parameters_dict, node_parameters_dict, protocol_parameters_dict=None):
         try:
             self.bench_parameters = BenchParameters(bench_parameters_dict)
+            node_parameters_dict = apply_protocol_parameters(
+                node_parameters_dict,
+                protocol_parameters_dict,
+            )
             self.node_parameters = NodeParameters(node_parameters_dict)
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)

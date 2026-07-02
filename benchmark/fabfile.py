@@ -37,10 +37,10 @@ def local(ctx, debug=False):
         'workers': 1,
         'rate': 80000,
         'tx_size': 512,
-        'duration': 20,
+        'duration': 60,
     }
     node_params = {
-        'header_size': 1000,  # bytes
+        'header_size': 20000000,  # bytes
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms
@@ -48,8 +48,11 @@ def local(ctx, debug=False):
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
     }
+    protocol_params = {
+        'narwhal_based': False,
+    }
     try:
-        ret = LocalBench(bench_params, node_params).run(debug)
+        ret = LocalBench(bench_params, node_params, protocol_params).run(debug)
         print(ret.result())
     except BenchError as e:
         Print.error(e)
@@ -152,8 +155,11 @@ def remote(ctx, debug=False):
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
     }
+    protocol_params = {
+        'narwhal_based': True,
+    }
     try:
-        Bench(ctx).run(bench_params, node_params, debug)
+        Bench(ctx).run(bench_params, node_params, protocol_params, debug)
     except BenchError as e:
         Print.error(e)
 
@@ -249,8 +255,12 @@ def cloudlab_remote(ctx, debug=False):
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
     }
+    # Protocol parameters to switch among different protocols
+    protocol_params = {
+        'narwhal_based': True,
+    }
     try:
-        CloudLabBench(ctx).run(bench_params, node_params, debug)
+        CloudLabBench(ctx).run(bench_params, node_params, protocol_params, debug)
     except BenchError as e:
         Print.error(e)
 

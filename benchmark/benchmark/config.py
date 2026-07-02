@@ -163,6 +163,7 @@ class LocalCommittee(Committee):
 
 class NodeParameters:
     def __init__(self, json):
+        json.setdefault('use_narwhal', True)
         inputs = []
         try:
             inputs += [json['header_size']]
@@ -177,6 +178,8 @@ class NodeParameters:
 
         if not all(isinstance(x, int) for x in inputs):
             raise ConfigError('Invalid parameters type')
+        if not isinstance(json['use_narwhal'], bool):
+            raise ConfigError('Invalid use_narwhal type')
 
         self.json = json
 
@@ -184,6 +187,19 @@ class NodeParameters:
         assert isinstance(filename, str)
         with open(filename, 'w') as f:
             dump(self.json, f, indent=4, sort_keys=True)
+
+
+def apply_protocol_parameters(node_parameters, protocol_parameters=None):
+    assert isinstance(node_parameters, dict)
+    if protocol_parameters is None:
+        return node_parameters
+    assert isinstance(protocol_parameters, dict)
+    node_parameters = dict(node_parameters)
+    if 'narwhal_based' in protocol_parameters:
+        node_parameters['use_narwhal'] = bool(protocol_parameters['narwhal_based'])
+    if 'use_narwhal' in protocol_parameters:
+        node_parameters['use_narwhal'] = bool(protocol_parameters['use_narwhal'])
+    return node_parameters
 
 
 class BenchParameters:
@@ -216,6 +232,10 @@ class BenchParameters:
             self.duration = int(json['duration'])
 
             self.runs = int(json['runs']) if 'runs' in json else 1
+
+            # Protocol based parameters
+            self.narwhal_based = bool(json['narwhal_based']) if 'narwhal_based' in json else True
+
         except KeyError as e:
             raise ConfigError(f'Malformed bench parameters: missing key {e}')
 
