@@ -1,4 +1,5 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
+from os import makedirs
 from os.path import join
 
 
@@ -65,11 +66,16 @@ class PathMaker:
         return 'results'
 
     @staticmethod
-    def result_file(faults, nodes, workers, collocate, rate, tx_size):
-        return join(
-            PathMaker.results_path(),
-            f'bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
-        )
+    def result_file(faults, nodes, workers, collocate, rate, tx_size, components=None):
+        path = PathMaker.results_path()
+        if components:
+            assert isinstance(components, dict)
+            for name, enabled in sorted(components.items()):
+                assert isinstance(name, str)
+                assert isinstance(enabled, bool)
+                path = join(path, f'{name}={str(enabled).lower()}')
+        makedirs(path, exist_ok=True)
+        return join(path, f'bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt')
 
     @staticmethod
     def plots_path():

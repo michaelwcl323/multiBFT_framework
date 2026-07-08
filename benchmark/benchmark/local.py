@@ -147,7 +147,17 @@ class LocalBench:
 
             # Parse logs and return the parser.
             Print.info('Parsing logs...')
-            return LogParser.process(PathMaker.logs_path(), faults=self.faults)
+            result = LogParser.process(PathMaker.logs_path(), faults=self.faults)
+            result.print(PathMaker.result_file(
+                self.faults,
+                nodes,
+                self.workers,
+                self.collocate,
+                rate,
+                self.tx_size,
+                self.node_parameters.components(),
+            ))
+            return result
 
         except (subprocess.SubprocessError, ParseError) as e:
             self._kill_nodes()

@@ -374,7 +374,8 @@ class Bench:
                             bench_parameters.workers,
                             bench_parameters.collocate,
                             r, 
-                            bench_parameters.tx_size, 
+                            bench_parameters.tx_size,
+                            node_parameters.components(),
                         ))
                     except (subprocess.SubprocessError, GroupException, ParseError) as e:
                         self.kill(hosts=selected_hosts)

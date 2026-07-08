@@ -1607,6 +1607,7 @@ SCRIPTEOF'''
                                 bench_parameters.collocate,
                                 rate,
                                 bench_parameters.tx_size,
+                                node_parameters.components(),
                             ))
                         except (subprocess.SubprocessError, GroupException, ParseError) as e:
                             self.kill(hosts=selected_hosts)

@@ -6,6 +6,7 @@ from os.path import join
 from re import findall, search
 from statistics import mean
 
+from benchmark.config import NodeParameters
 from benchmark.utils import Print
 
 
@@ -154,8 +155,12 @@ class LogParser:
             'max_batch_delay': int(
                 search(r'Max batch delay .* (\d+)', log).group(1)
             ),
-            'use_narwhal': search(r'Use Narwhal .* (true|false)', log).group(1) == 'true',
         }
+        for name in NodeParameters.COMPONENT_FLAGS:
+            label = NodeParameters.component_label(name)
+            match = search(rf'Use {label} .* (true|false)', log)
+            if match:
+                configs[name] = match.group(1) == 'true'
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
         
@@ -230,7 +235,11 @@ class LogParser:
         sync_retry_nodes = self.configs[0]['sync_retry_nodes']
         batch_size = self.configs[0]['batch_size']
         max_batch_delay = self.configs[0]['max_batch_delay']
-        use_narwhal = self.configs[0]['use_narwhal']
+        components = ''.join(
+            f' Use {NodeParameters.component_label(name)}: {self.configs[0][name]}\n'
+            for name in NodeParameters.COMPONENT_FLAGS
+            if name in self.configs[0]
+        )
 
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
@@ -256,7 +265,7 @@ class LogParser:
             f' GC depth: {gc_depth:,} round(s)\n'
             f' Sync retry delay: {sync_retry_delay:,} ms\n'
             f' Sync retry nodes: {sync_retry_nodes:,} node(s)\n'
-            f' Use Narwhal: {use_narwhal}\n'
+            f'{components}'
             f' batch size: {batch_size:,} B\n'
             f' Max batch delay: {max_batch_delay:,} ms\n'
             '\n'

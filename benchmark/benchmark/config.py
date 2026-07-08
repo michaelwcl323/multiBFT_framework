@@ -162,6 +162,10 @@ class LocalCommittee(Committee):
 
 
 class NodeParameters:
+    COMPONENT_FLAGS = (
+        'use_narwhal',
+    )
+
     def __init__(self, json):
         json.setdefault('use_narwhal', True)
         inputs = []
@@ -182,6 +186,19 @@ class NodeParameters:
             raise ConfigError('Invalid use_narwhal type')
 
         self.json = json
+
+    def components(self):
+        return {
+            name: self.json[name]
+            for name in self.COMPONENT_FLAGS
+            if name in self.json
+        }
+
+    @classmethod
+    def component_label(cls, name):
+        assert isinstance(name, str)
+        name = name[4:] if name.startswith('use_') else name
+        return name.replace('_', ' ').title()
 
     def print(self, filename):
         assert isinstance(filename, str)

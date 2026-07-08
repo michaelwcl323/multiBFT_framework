@@ -1,5 +1,5 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
-from re import search
+from re import findall, search
 from collections import defaultdict
 from statistics import mean, stdev
 from glob import glob
@@ -11,16 +11,21 @@ from benchmark.utils import PathMaker
 
 
 class Setup:
-    def __init__(self, faults, nodes, workers, collocate, rate, tx_size):
+    def __init__(self, faults, nodes, workers, collocate, rate, tx_size, components=None):
         self.nodes = nodes
         self.workers = workers
         self.collocate = collocate
         self.rate = rate
         self.tx_size = tx_size
         self.faults = faults
+        self.components = components or {}
         self.max_latency = 'any'
 
     def __str__(self):
+        components = ''.join(
+            f' Use {name}: {enabled}\n'
+            for name, enabled in sorted(self.components.items())
+        )
         return (
             f' Faults: {self.faults}\n'
             f' Committee size: {self.nodes}\n'
@@ -28,6 +33,7 @@ class Setup:
             f' Collocate primary and workers: {self.collocate}\n'
             f' Input rate: {self.rate} tx/s\n'
             f' Transaction size: {self.tx_size} B\n'
+            f'{components}'
             f' Max latency: {self.max_latency} ms\n'
         )
 
@@ -47,7 +53,11 @@ class Setup:
         ).group(1)
         rate = int(search(r'Input rate: (\d+)', raw).group(1))
         tx_size = int(search(r'Transaction size: (\d+)', raw).group(1))
-        return cls(faults, nodes, workers, collocate, rate, tx_size)
+        components = {
+            name: value == 'True'
+            for name, value in findall(r'Use ([A-Za-z][A-Za-z0-9 ]*): (True|False)', raw)
+        }
+        return cls(faults, nodes, workers, collocate, rate, tx_size, components)
 
 
 class Result:
@@ -89,7 +99,7 @@ class LogAggregator:
         self.max_latencies = max_latencies
 
         data = ''
-        for filename in glob(join(PathMaker.results_path(), '*.txt')):
+        for filename in glob(join(PathMaker.results_path(), '**', '*.txt'), recursive=True):
             with open(filename, 'r') as f:
                 data += f.read()
 
